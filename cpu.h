@@ -5,24 +5,19 @@
 
 /* Typedefs */
 
-struct cpu_s
-{
-    uint8_t* memory;
-    uint8_t* graphics;
-    uint8_t* pc;
-    uint8_t* sp;
-    uint8_t* i;
+typedef struct cpu_s cpu_t;
 
-    uint8_t reg_v[16];
+/* Public function declarations */
 
-    uint8_t timer_delay;
-    uint8_t timer_sound;
-};
+cpu_t* cpu_allocate(void);
+void cpu_load(cpu_t* p_cpu, uint8_t* program, uint16_t size, uint16_t start);
 
-/* Private function declarations */
+void cpu_run(cpu_t* p_cpu);
+void cpu_tick(cpu_t* p_cpu);
 
-struct cpu_s* cpu_allocate(void);
-void cpu_load(struct cpu_s* p_cpu, uint8_t* program, uint16_t size, uint16_t start);
-void cpu_run(struct cpu_s* p_cpu);
+uint8_t* cpu_graphics(cpu_t* p_cpu);
+
+void cpu_press_key(cpu_t* p_cpu, uint8_t key);
+void cpu_release_key(cpu_t* p_cpu, uint8_t key);
 
 #endif /* CPU_H_ */
