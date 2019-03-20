@@ -1,5 +1,7 @@
 #include "cpu.h"
 
+#include "log.h"
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,6 +26,9 @@ struct cpu_s
     uint8_t timer_sound;
     
     uint8_t keys[16];
+    
+    int draw_flag;
+    int halted_flag;
 };
 
 typedef void (*opcode_handler_t)(cpu_t* p_cpu);
@@ -124,14 +129,23 @@ void cpu_run(cpu_t* p_cpu)
     opcode_handlers[(*p_cpu->pc >> 4) & 0x0F](p_cpu);
 }
 
+int cpu_halted(cpu_t* p_cpu) {
+	return p_cpu->halted_flag;
+}
+
 void cpu_tick(cpu_t* p_cpu)
-{ 
-    /* Timers 60Hz */
+{
     if(p_cpu->timer_delay)
         p_cpu->timer_delay--;
         
     if(p_cpu->timer_sound)
         p_cpu->timer_sound--;
+}
+
+int cpu_graphics_changed(cpu_t* p_cpu) {
+	int flag = p_cpu->draw_flag;
+	p_cpu->draw_flag = 0;
+	return flag;
 }
 
 uint8_t* cpu_graphics(cpu_t* p_cpu)
@@ -153,7 +167,7 @@ void cpu_release_key(cpu_t* p_cpu, uint8_t key)
 
 static void unhandled_opcode_handler(cpu_t* p_cpu)
 {
-	printf("%04x:%02x%02x ERROR\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1));
+	DEBUG_PRINT("%04x:%02x%02x ERROR\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1));
     exit(-1);
 }
 
@@ -165,13 +179,13 @@ static void opcode00_handler(cpu_t* p_cpu)
 	switch(*(p_cpu->pc + 1))
 	{
 		case 0xE0:
-			printf("%04x:%02x%02x CLEAR DISPLAY\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1));
+			DEBUG_PRINT("%04x:%02x%02x CLEAR DISPLAY\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1));
 			(void) memset(p_cpu->graphics, 0, 8 * 32);
 			p_cpu->pc += 2;
 			break;
 			
 		case 0xEE:
-			printf("%04x:%02x%02x RETURN\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1));
+			DEBUG_PRINT("%04x:%02x%02x RETURN\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1));
 			p_cpu->pc = p_cpu->memory + *((uint16_t*)p_cpu->sp);
 			p_cpu->sp -= sizeof(uint16_t);
 			p_cpu->pc += 2;
@@ -191,7 +205,7 @@ static void opcode01_handler(cpu_t* p_cpu)
     addr |= (uint16_t) *(p_cpu->pc + 1);
     addr &= (uint16_t) 0x0FFF;
     
-	printf("%04x:%02x%02x JUMP %03x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), addr);
+	DEBUG_PRINT("%04x:%02x%02x JUMP %03x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), addr);
 	
     p_cpu->pc = p_cpu->memory + addr;
 }
@@ -204,7 +218,7 @@ static void opcode02_handler(cpu_t* p_cpu)
     addr |= (uint16_t) *(p_cpu->pc + 1);
     addr &= (uint16_t) 0x0FFF;
     
-	printf("%04x:%02x%02x CALL %03x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), addr);
+	DEBUG_PRINT("%04x:%02x%02x CALL %03x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), addr);
 	
     /* Store current address pointer on stack. */
     p_cpu->sp += sizeof(uint16_t);
@@ -220,7 +234,7 @@ static void opcode03_handler(cpu_t* p_cpu)
     uint8_t x = *p_cpu->pc & 0x0F;
     uint8_t value = *(p_cpu->pc + 1);
     
-	printf("%04x:%02x%02x if(V%x==%d)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
+	DEBUG_PRINT("%04x:%02x%02x if(V%x==%d)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
 	
     /* If VX == NN, skip next instruction. */
     if(value == p_cpu->reg_v[x])
@@ -234,7 +248,7 @@ static void opcode04_handler(cpu_t* p_cpu)
     uint8_t x = *p_cpu->pc & 0x0F;
     uint8_t value = *(p_cpu->pc + 1);
     
-	printf("%04x:%02x%02x if(V%x!=%d)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
+	DEBUG_PRINT("%04x:%02x%02x if(V%x!=%d)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
 	
     /* If VX != NN, skip next instruction. */
     if(value != p_cpu->reg_v[x])
@@ -248,7 +262,7 @@ static void opcode05_handler(cpu_t* p_cpu)
     uint8_t x = *p_cpu->pc & 0x0F;
     uint8_t y = (*(p_cpu->pc + 1) >> 4) & 0x0F;
 
-	printf("%04x:%02x%02x if(V%x!=V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+	DEBUG_PRINT("%04x:%02x%02x if(V%x!=V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
 	
     /* If VX == VY, skip next instruction. */
     if(p_cpu->reg_v[y] == p_cpu->reg_v[x])
@@ -262,7 +276,7 @@ static void opcode06_handler(cpu_t* p_cpu)
     uint8_t x = *p_cpu->pc & 0x0F;
     uint8_t value = *(p_cpu->pc + 1);
     
-	printf("%04x:%02x%02x V%x=%d\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
+	DEBUG_PRINT("%04x:%02x%02x V%x=%d\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
 	
     p_cpu->reg_v[x] = value;
     p_cpu->pc += 2;
@@ -274,7 +288,7 @@ static void opcode07_handler(cpu_t* p_cpu)
     uint8_t x = *p_cpu->pc & 0x0F;
     uint8_t value = *(p_cpu->pc + 1);
     
-	printf("%04x:%02x%02x V%x+=%d\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
+	DEBUG_PRINT("%04x:%02x%02x V%x+=%d\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
 	
     p_cpu->reg_v[x] += value;
     p_cpu->pc += 2;
@@ -298,27 +312,27 @@ static void opcode08_handler(cpu_t* p_cpu)
     switch(op)
     {
         case (uint8_t) 0x00:
-			printf("%04x:%02x%02x V%x=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+			DEBUG_PRINT("%04x:%02x%02x V%x=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
             p_cpu->reg_v[x] = p_cpu->reg_v[y];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x01:
-			printf("%04x:%02x%02x V%x|=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+			DEBUG_PRINT("%04x:%02x%02x V%x|=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
             p_cpu->reg_v[x] |= p_cpu->reg_v[y];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x02:
-			printf("%04x:%02x%02x V%x&=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+			DEBUG_PRINT("%04x:%02x%02x V%x&=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
             p_cpu->reg_v[x] &= p_cpu->reg_v[y];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x03:
-			printf("%04x:%02x%02x V%x^=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+			DEBUG_PRINT("%04x:%02x%02x V%x^=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
             p_cpu->reg_v[x] ^= p_cpu->reg_v[y];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x04:
-			printf("%04x:%02x%02x V%x+=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+			DEBUG_PRINT("%04x:%02x%02x V%x+=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
             {
                 uint16_t res = (uint16_t) p_cpu->reg_v[x] + (uint16_t) p_cpu->reg_v[y];
                 if(res & 0xFF00)
@@ -330,7 +344,7 @@ static void opcode08_handler(cpu_t* p_cpu)
             }
             break;
         case (uint8_t) 0x05:
-			printf("%04x:%02x%02x V%x-=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+			DEBUG_PRINT("%04x:%02x%02x V%x-=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
             {
                 if(p_cpu->reg_v[y] > p_cpu->reg_v[x])
                     p_cpu->reg_v[15] = 0;
@@ -341,13 +355,13 @@ static void opcode08_handler(cpu_t* p_cpu)
             }
             break;
         case (uint8_t) 0x06:
-			printf("%04x:%02x%02x V%x>>=1\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			DEBUG_PRINT("%04x:%02x%02x V%x>>=1\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
             p_cpu->reg_v[15] = p_cpu->reg_v[x] & (uint8_t) 0x01;
             p_cpu->reg_v[x] >>= 1;
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x07:
-			printf("%04x:%02x%02x V%x=V%x-V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y, x);
+			DEBUG_PRINT("%04x:%02x%02x V%x=V%x-V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y, x);
             {
                 if(p_cpu->reg_v[x] > p_cpu->reg_v[y])
                     p_cpu->reg_v[15] = 0;
@@ -357,7 +371,7 @@ static void opcode08_handler(cpu_t* p_cpu)
                 p_cpu->pc += 2;
             }
         case (uint8_t) 0x0E:
-			printf("%04x:%02x%02x V%x<<=1\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			DEBUG_PRINT("%04x:%02x%02x V%x<<=1\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
             p_cpu->reg_v[15] = (p_cpu->reg_v[x] >> 7) & (uint8_t) 0x01;
             p_cpu->reg_v[x] <<= 1;
             p_cpu->pc += 2;
@@ -374,7 +388,7 @@ static void opcode09_handler(cpu_t* p_cpu)
     uint8_t x = *p_cpu->pc & 0x0F;
     uint8_t y = (*(p_cpu->pc + 1) >> 4) & 0x0F;
 
-	printf("%04x:%02x%02x if(V%x==V%y)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+	DEBUG_PRINT("%04x:%02x%02x if(V%x==V%y)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
 	
     /* If VX != VY, skip next instruction. */
     if(p_cpu->reg_v[y] != p_cpu->reg_v[x])
@@ -389,7 +403,7 @@ static void opcode10_handler(cpu_t* p_cpu)
     addr |= (uint16_t) *(p_cpu->pc + 1);
     addr &= (uint16_t) 0x0FFF;
     
-	printf("%04x:%02x%02x I = %03x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), addr);
+	DEBUG_PRINT("%04x:%02x%02x I = %03x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), addr);
 	
     p_cpu->i = p_cpu->memory + addr;
     p_cpu->pc += 2;
@@ -402,7 +416,7 @@ static void opcode11_handler(cpu_t* p_cpu)
     addr |= (uint16_t) *(p_cpu->pc + 1);
     addr &= (uint16_t) 0x0FFF;
 
-	printf("%04x:%02x%02x PC=V0+%03x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), addr);
+	DEBUG_PRINT("%04x:%02x%02x PC=V0+%03x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), addr);
 	
     p_cpu->pc = p_cpu->memory + p_cpu->reg_v[0] + addr;
 }
@@ -413,7 +427,7 @@ static void opcode12_handler(cpu_t* p_cpu)
     uint8_t x = *p_cpu->pc & 0x0F;
     uint8_t value = *(p_cpu->pc + 1);
     
-	printf("%04x:%02x%02x V%x=rand()&%02x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
+	DEBUG_PRINT("%04x:%02x%02x V%x=rand()&%02x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
 	
     p_cpu->reg_v[x] = ((uint8_t) (rand() % 256)) & value;
 
@@ -429,7 +443,7 @@ static void opcode13_handler(cpu_t* p_cpu)
     uint8_t y = (*(p_cpu->pc + 1) >> 4) & 0x0F;
     uint8_t n = *(p_cpu->pc + 1) & 0x0F;
     
-	printf("%04x:%02x%02x DRAW V%x (%d), V%x (%d), %d\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y, n);
+	DEBUG_PRINT("%04x:%02x%02x DRAW V%x, V%x, %d\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y, n);
 	    
     p_cpu->reg_v[15] = 0;
 
@@ -452,6 +466,8 @@ static void opcode13_handler(cpu_t* p_cpu)
         }
     }
     
+    p_cpu->draw_flag = 1;
+    
     p_cpu->pc += 2;
 }
 
@@ -467,7 +483,7 @@ static void opcode14_handler(cpu_t* p_cpu)
     switch(*(p_cpu->pc + 1))
     {
         case (uint8_t) 0x9E:
-			printf("%04x:%02x%02x if(key()==V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			DEBUG_PRINT("%04x:%02x%02x if(key()==V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
 			if(p_cpu->keys[p_cpu->reg_v[x]]) {
 				p_cpu->pc += 2;
 			}
@@ -475,7 +491,7 @@ static void opcode14_handler(cpu_t* p_cpu)
 			break;
         
         case (uint8_t) 0xA1:
-			printf("%04x:%02x%02x if(key()!=V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			DEBUG_PRINT("%04x:%02x%02x if(key()!=V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
 			if(!p_cpu->keys[p_cpu->reg_v[x]]) {
 				p_cpu->pc += 2;
 			}
@@ -513,16 +529,18 @@ static void opcode15_handler(cpu_t* p_cpu)
     switch(*(p_cpu->pc + 1))
     {
         case (uint8_t) 0x07:
-			printf("%04x:%02x%02x V%x = get_delay()\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			DEBUG_PRINT("%04x:%02x%02x V%x = get_delay()\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
             p_cpu->reg_v[x] = p_cpu->timer_delay;
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x0A:
-			printf("%04x:%02x%02x V%x = get_key()\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			DEBUG_PRINT("%04x:%02x%02x V%x = get_key()\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			p_cpu->halted_flag = 1;
 			for(uint8_t i=0; i<16; i++)
 			{
 				if(p_cpu->keys[i])
 				{
+					p_cpu->halted_flag = 0;
 					p_cpu->reg_v[x] = i;
 					p_cpu->pc += 2;
 					break;
@@ -530,39 +548,39 @@ static void opcode15_handler(cpu_t* p_cpu)
 			}
             break;
         case (uint8_t) 0x15:
-			printf("%04x:%02x%02x delay_timer(V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			DEBUG_PRINT("%04x:%02x%02x delay_timer(V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
             p_cpu->timer_delay = p_cpu->reg_v[x];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x18:
-			printf("%04x:%02x%02x sound_timer(V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			DEBUG_PRINT("%04x:%02x%02x sound_timer(V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
             p_cpu->timer_sound = p_cpu->reg_v[x];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x1E:
-			printf("%04x:%02x%02x I+=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			DEBUG_PRINT("%04x:%02x%02x I+=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
             p_cpu->i += p_cpu->reg_v[x];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x29:
-			printf("%04x:%02x%02x I=sprite_addr[V%x]\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			DEBUG_PRINT("%04x:%02x%02x I=sprite_addr[V%x]\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
 			p_cpu->i = p_cpu->font + (p_cpu->reg_v[x] * 5);
             p_cpu->pc += 2;
 			break;
         case (uint8_t) 0x33:
-			printf("%04x:%02x%02x BCD(V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			DEBUG_PRINT("%04x:%02x%02x BCD(V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
 			*p_cpu->i = p_cpu->reg_v[x] / 100;
 			*(p_cpu->i + 1) = (p_cpu->reg_v[x] / 10) % 10;
 			*(p_cpu->i + 2) = p_cpu->reg_v[x] % 10;
             p_cpu->pc += 2;
 			break;
         case (uint8_t) 0x55:
-			printf("%04x:%02x%02x reg_dump(V%x,&I)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			DEBUG_PRINT("%04x:%02x%02x reg_dump(V%x,&I)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
             (void) memcpy(p_cpu->i, p_cpu->reg_v, (x + 1) * sizeof(uint8_t));
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x65:
-			printf("%04x:%02x%02x reg_load(V%x,&I)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			DEBUG_PRINT("%04x:%02x%02x reg_load(V%x,&I)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
             (void) memcpy(p_cpu->reg_v, p_cpu->i, (x + 1) * sizeof(uint8_t));
             p_cpu->pc += 2;
             break;
