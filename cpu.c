@@ -9,23 +9,45 @@
 
 /* Defines */
 
+#define PRINT_INSTR(str_)	DEBUG_PRINT("%04x:%02x%02x %s\n", mem_offset(p_cpu, p_cpu->pc), *(p_cpu->pc), *(p_cpu->pc + 1), str_);
+
+#define FONT_CHAR_SIZE		(5)
+#define FONT_CHAR_COUNT		(16)
+
+#define GRAPHICS_COLS		(64)
+#define GRAPHICS_ROWS		(32)
+#define GRAPHICS_SIZE		(GRAPHICS_COLS * GRAPHICS_ROWS)
+
+#define KEY_COUNT			(16)
+
+#define REG_COUNT			(16)
+
+#define MEM_SIZE			(0x1000)
+
+#define FONT_ADDRESS		(0x0000)
+#define FONT_SIZE			(FONT_CHAR_SIZE * FONT_CHAR_COUNT)
+
+#define ROM_ADDRESS			(0x0200)
+
+#define STACK_ADDRESS		(0x0FA0)
+
 /* Typedefs */
 
-struct cpu_s
-{
-    uint8_t* memory;
-    uint8_t* graphics;
+struct cpu_s {
+    uint8_t memory[MEM_SIZE];
+    uint8_t graphics[GRAPHICS_SIZE];
+    
     uint8_t* font;
     uint8_t* pc;
     uint8_t* sp;
     uint8_t* i;
 
-    uint8_t reg_v[16];
+    uint8_t reg_v[REG_COUNT];
 
     uint8_t timer_delay;
     uint8_t timer_sound;
     
-    uint8_t keys[16];
+    uint8_t keys[KEY_COUNT];
     
     int draw_flag;
     int halted_flag;
@@ -35,8 +57,7 @@ typedef void (*opcode_handler_t)(cpu_t* p_cpu);
 
 /* Private variables */
 
-static const uint8_t fontset[80] =
-{ 
+static const uint8_t fontset[FONT_SIZE] = { 
   0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
   0x20, 0x60, 0x20, 0x20, 0x70, // 1
   0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
@@ -95,99 +116,175 @@ static const opcode_handler_t opcode_handlers[16] = {
     opcode15_handler
 };
 
+/* Inlined private function definitions */
+
+static inline uint8_t* mem_address(cpu_t* p_cpu, uint16_t offset) {
+	if(offset >= MEM_SIZE) {
+		ERROR_PRINT("ADDRESS OUT OF BOUND.");
+		exit(-1);
+	}
+	return p_cpu->memory + offset;
+}
+
+static inline uint16_t mem_offset(cpu_t* p_cpu, uint8_t* address) {
+	uint16_t offset = (uint16_t) (address - p_cpu->memory);
+	if(offset >= MEM_SIZE) {
+		ERROR_PRINT("ADDRESS OUT OF BOUND.");
+		exit(-1);
+	}
+	return (uint16_t) (address - p_cpu->memory);
+}
+
+static inline void stack_push_pc(cpu_t* p_cpu) {
+	p_cpu->sp += sizeof(uint16_t);
+	*((uint16_t*)p_cpu->sp) = mem_offset(p_cpu, p_cpu->pc);
+}
+
+static inline void stack_pop_pc(cpu_t* p_cpu) {
+	p_cpu->pc = mem_address(p_cpu, *((uint16_t*)p_cpu->sp));
+	p_cpu->sp -= sizeof(uint16_t);
+}
+
+static inline uint16_t decode_NNN(const cpu_t* p_cpu) {
+	uint16_t nnn = *p_cpu->pc;
+	nnn <<= 8;
+	nnn |= *(p_cpu->pc + 1);
+	nnn &= (uint16_t) 0x0FFF;
+	return nnn;
+}
+
+static inline uint8_t decode_NN(const cpu_t* p_cpu) {
+	uint8_t nn = *(p_cpu->pc + 1);
+	return nn;
+}
+
+static inline uint8_t decode_N(const cpu_t* p_cpu) {
+	uint8_t n = *(p_cpu->pc + 1);
+	n &= (uint8_t) 0x0F;
+	return n;
+}
+
+static inline uint8_t decode_X(const cpu_t* p_cpu) {
+	uint8_t x = *p_cpu->pc;
+	x &= (uint8_t) 0x0F;
+	return x;
+}
+
+static inline uint8_t decode_Y(const cpu_t* p_cpu) {
+	uint8_t y = *(p_cpu->pc + 1);
+	y >>= 4;
+	y &= (uint8_t) 0x0F;
+	return y;
+}
+
+static inline uint8_t decode_op(const cpu_t* p_cpu) {
+	uint8_t op = *p_cpu->pc;
+	op >>= 4;
+	op &= (uint8_t) 0x0F;
+	return op;
+}
+
 /* Public function definitions */
 
-cpu_t* cpu_allocate(void)
-{
+cpu_t* cpu_allocate(void) {
     cpu_t* p_cpu = calloc(1, sizeof(struct cpu_s));
     
-    if(p_cpu)
-    {
-        p_cpu->memory = calloc(4096, sizeof(uint8_t));
-        p_cpu->graphics = p_cpu->memory + 0xF00;
-        p_cpu->sp = p_cpu->memory + 0xFA0;
-        p_cpu->pc = p_cpu->memory + 0x200;
-        p_cpu->font = p_cpu->memory + 0x000;
+    if(p_cpu) {
+		p_cpu->sp = mem_address(p_cpu, STACK_ADDRESS);
+		p_cpu->pc = mem_address(p_cpu, ROM_ADDRESS);
+		p_cpu->font = mem_address(p_cpu, FONT_ADDRESS);
     }
     
     return p_cpu;
 }
 
-void cpu_load(cpu_t* p_cpu, uint8_t* program, uint16_t size, uint16_t start)
-{
-	(void) memset(p_cpu->memory, 0, 4096);
-	
-    (void) memcpy(p_cpu->memory + start, program, size);
-    
-    (void) memcpy(p_cpu->font, fontset, sizeof(fontset));
-    
-    p_cpu->pc = p_cpu->memory + start;
+void cpu_load(cpu_t* p_cpu, uint8_t* program, uint16_t size) {
+	if (p_cpu && program) {	
+		p_cpu->pc = mem_address(p_cpu, ROM_ADDRESS);
+		
+		(void) memset(p_cpu->memory, 0, MEM_SIZE);
+		(void) memcpy(p_cpu->pc, program, size);
+		(void) memcpy(p_cpu->font, fontset, sizeof(fontset));
+	}
 }
 
-void cpu_run(cpu_t* p_cpu)
-{
-    opcode_handlers[(*p_cpu->pc >> 4) & 0x0F](p_cpu);
+void cpu_run(cpu_t* p_cpu) {
+	if(p_cpu) {
+		opcode_handlers[decode_op(p_cpu)](p_cpu);
+	}
 }
 
 int cpu_halted(cpu_t* p_cpu) {
-	return p_cpu->halted_flag;
+	if(p_cpu) {
+		return p_cpu->halted_flag;
+	} else {
+		return 0;
+	}
 }
 
-void cpu_tick(cpu_t* p_cpu)
-{
-    if(p_cpu->timer_delay)
-        p_cpu->timer_delay--;
-        
-    if(p_cpu->timer_sound)
-        p_cpu->timer_sound--;
+void cpu_tick(cpu_t* p_cpu) {
+	if(p_cpu) {
+		if(p_cpu->timer_delay)
+			p_cpu->timer_delay--;
+			
+		if(p_cpu->timer_sound)
+			p_cpu->timer_sound--;
+	}
 }
 
 int cpu_graphics_changed(cpu_t* p_cpu) {
-	int flag = p_cpu->draw_flag;
-	p_cpu->draw_flag = 0;
-	return flag;
+	if(p_cpu) {
+		int flag = p_cpu->draw_flag;
+		p_cpu->draw_flag = 0;
+		return flag;
+	} else {
+		return 0;
+	}
 }
 
-uint8_t* cpu_graphics(cpu_t* p_cpu)
-{
-	return p_cpu->graphics;
+uint8_t* cpu_graphics(cpu_t* p_cpu) {
+	if(p_cpu) {
+		return p_cpu->graphics;
+	} else {
+		return NULL;
+	}
 }
 
-void cpu_press_key(cpu_t* p_cpu, uint8_t key)
-{
-	p_cpu->keys[key] = 1;
+void cpu_press_key(cpu_t* p_cpu, uint8_t key) {
+	if(p_cpu && (key < KEY_COUNT)) {
+		p_cpu->keys[key] = 1;
+	}
 }
 	
-void cpu_release_key(cpu_t* p_cpu, uint8_t key)
-{
-	p_cpu->keys[key] = 0;
+void cpu_release_key(cpu_t* p_cpu, uint8_t key) {
+	if(p_cpu && (key < KEY_COUNT)) {
+		p_cpu->keys[key] = 0;
+	}
 }
 
 /* Private function definitions */
 
-static void unhandled_opcode_handler(cpu_t* p_cpu)
-{
-	DEBUG_PRINT("%04x:%02x%02x ERROR\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1));
+static void unhandled_opcode_handler(cpu_t* p_cpu) {
+	PRINT_INSTR("ERROR");
     exit(-1);
 }
 
-/* 0NNN	Call		Calls RCA 1802 program at address NNN. Not necessary for most ROMs. */
+/* 0NNN	Call	Calls RCA 1802 program at address NNN. Not necessary for most ROMs. */
 /* 00E0	Display	disp_clear()	Clears the screen. */
 /* 00EE	Flow	return;	Returns from a subroutine. */
-static void opcode00_handler(cpu_t* p_cpu)
-{
-	switch(*(p_cpu->pc + 1))
-	{
+static void opcode00_handler(cpu_t* p_cpu) {
+	switch(*(p_cpu->pc + 1)) {
 		case 0xE0:
-			DEBUG_PRINT("%04x:%02x%02x CLEAR DISPLAY\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1));
-			(void) memset(p_cpu->graphics, 0, 8 * 32);
+			PRINT_INSTR("CLR");
+			
+			(void) memset(p_cpu->graphics, 0, GRAPHICS_SIZE);
 			p_cpu->pc += 2;
 			break;
 			
 		case 0xEE:
-			DEBUG_PRINT("%04x:%02x%02x RETURN\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1));
-			p_cpu->pc = p_cpu->memory + *((uint16_t*)p_cpu->sp);
-			p_cpu->sp -= sizeof(uint16_t);
+			PRINT_INSTR("RETURN");
+			
+			stack_pop_pc(p_cpu);
 			p_cpu->pc += 2;
 			break;
 			
@@ -198,99 +295,84 @@ static void opcode00_handler(cpu_t* p_cpu)
 }
 
 /* 1NNN	Flow	goto NNN;	Jumps to address NNN. */
-static void opcode01_handler(cpu_t* p_cpu)
-{
-    /* Set program counter to NNN. */
-    uint16_t addr = (((uint16_t) *p_cpu->pc) << 8);
-    addr |= (uint16_t) *(p_cpu->pc + 1);
-    addr &= (uint16_t) 0x0FFF;
-    
-	DEBUG_PRINT("%04x:%02x%02x JUMP %03x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), addr);
-	
-    p_cpu->pc = p_cpu->memory + addr;
+static void opcode01_handler(cpu_t* p_cpu) {
+	PRINT_INSTR("JUMP");
+
+    p_cpu->pc = mem_address(p_cpu, decode_NNN(p_cpu));
 }
 
 /* 2NNN	Flow	*(0xNNN)()	Calls subroutine at NNN. */
-static void opcode02_handler(cpu_t* p_cpu)
-{
-    uint16_t addr = (uint16_t) *p_cpu->pc;
-    addr <<= 8;
-    addr |= (uint16_t) *(p_cpu->pc + 1);
-    addr &= (uint16_t) 0x0FFF;
-    
-	DEBUG_PRINT("%04x:%02x%02x CALL %03x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), addr);
+static void opcode02_handler(cpu_t* p_cpu) {
+	PRINT_INSTR("CALL");
 	
-    /* Store current address pointer on stack. */
-    p_cpu->sp += sizeof(uint16_t);
-    *((uint16_t*)p_cpu->sp) = (uint16_t) (p_cpu->pc - p_cpu->memory);
-    
-    /* Set program counter to NNN. */
-    p_cpu->pc = p_cpu->memory + addr;
+	stack_push_pc(p_cpu);
+	p_cpu->pc = mem_address(p_cpu, decode_NNN(p_cpu));
 }
 
 /* 3XNN	Cond	if(Vx==NN)	Skips the next instruction if VX equals NN. (Usually the next instruction is a jump to skip a code block) */
-static void opcode03_handler(cpu_t* p_cpu)
-{
-    uint8_t x = *p_cpu->pc & 0x0F;
-    uint8_t value = *(p_cpu->pc + 1);
-    
-	DEBUG_PRINT("%04x:%02x%02x if(V%x==%d)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
+static void opcode03_handler(cpu_t* p_cpu) {
+	PRINT_INSTR("if(Vx==NN)");
+	
+	uint8_t x = decode_X(p_cpu);
+	uint8_t nn = decode_NN(p_cpu);
 	
     /* If VX == NN, skip next instruction. */
-    if(value == p_cpu->reg_v[x])
-        p_cpu->pc += 2;
-    p_cpu->pc += 2;
+    if(nn == p_cpu->reg_v[x]) {
+        p_cpu->pc += 4;
+	} else {
+		p_cpu->pc += 2;
+	}
 }
 
 /* 4XNN	Cond	if(Vx!=NN)	Skips the next instruction if VX doesn't equal NN. (Usually the next instruction is a jump to skip a code block) */
-static void opcode04_handler(cpu_t* p_cpu)
-{
-    uint8_t x = *p_cpu->pc & 0x0F;
-    uint8_t value = *(p_cpu->pc + 1);
-    
-	DEBUG_PRINT("%04x:%02x%02x if(V%x!=%d)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
-	
+static void opcode04_handler(cpu_t* p_cpu) {
+	PRINT_INSTR("if(Vx!=NN)");
+
+	uint8_t x = decode_X(p_cpu);
+	uint8_t nn = decode_NN(p_cpu);
+
     /* If VX != NN, skip next instruction. */
-    if(value != p_cpu->reg_v[x])
-        p_cpu->pc += 2;
-    p_cpu->pc += 2;
+    if(nn != p_cpu->reg_v[x]) {
+        p_cpu->pc += 4;
+	} else {
+		p_cpu->pc += 2;
+	}
 }
 
 /* 5XY0	Cond	if(Vx!=Vy)	Skips the next instruction if VX equals VY. (Usually the next instruction is a jump to skip a code block) */
-static void opcode05_handler(cpu_t* p_cpu)
-{
-    uint8_t x = *p_cpu->pc & 0x0F;
-    uint8_t y = (*(p_cpu->pc + 1) >> 4) & 0x0F;
-
-	DEBUG_PRINT("%04x:%02x%02x if(V%x!=V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+static void opcode05_handler(cpu_t* p_cpu) {
+	PRINT_INSTR("if(Vx!=Vy)");
+	
+	uint8_t x = decode_X(p_cpu);
+	uint8_t y = decode_Y(p_cpu);
 	
     /* If VX == VY, skip next instruction. */
-    if(p_cpu->reg_v[y] == p_cpu->reg_v[x])
-        p_cpu->pc += 2;
-    p_cpu->pc += 2;
+    if(p_cpu->reg_v[x] == p_cpu->reg_v[y]) {
+        p_cpu->pc += 4;
+	} else {
+		p_cpu->pc += 2;
+	}
 }
 
 /* 6XNN	Const	Vx = NN	Sets VX to NN. */
-static void opcode06_handler(cpu_t* p_cpu)
-{
-    uint8_t x = *p_cpu->pc & 0x0F;
-    uint8_t value = *(p_cpu->pc + 1);
-    
-	DEBUG_PRINT("%04x:%02x%02x V%x=%d\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
+static void opcode06_handler(cpu_t* p_cpu) {
+	PRINT_INSTR("Vx=NN");
 	
-    p_cpu->reg_v[x] = value;
+	uint8_t x = decode_X(p_cpu);
+	uint8_t nn = decode_NN(p_cpu);
+	
+	p_cpu->reg_v[x] = nn;
     p_cpu->pc += 2;
 }
 
 /* 7XNN	Const	Vx += NN	Adds NN to VX. (Carry flag is not changed) */
-static void opcode07_handler(cpu_t* p_cpu)
-{
-    uint8_t x = *p_cpu->pc & 0x0F;
-    uint8_t value = *(p_cpu->pc + 1);
-    
-	DEBUG_PRINT("%04x:%02x%02x V%x+=%d\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
+static void opcode07_handler(cpu_t* p_cpu) {
+	PRINT_INSTR("Vx+=NN");
 	
-    p_cpu->reg_v[x] += value;
+	uint8_t x = decode_X(p_cpu);
+	uint8_t nn = decode_NN(p_cpu);
+	
+    p_cpu->reg_v[x] += nn;
     p_cpu->pc += 2;
 }
 
@@ -303,76 +385,91 @@ static void opcode07_handler(cpu_t* p_cpu)
 /* 8XY6	BitOp	Vx>>=1	Stores the least significant bit of VX in VF and then shifts VX to the right by 1.[2] */
 /* 8XY7	Math	Vx=Vy-Vx	Sets VX to VY minus VX. VF is set to 0 when there's a borrow, and 1 when there isn't. */
 /* 8XYE	BitOp	Vx<<=1	Stores the most significant bit of VX in VF and then shifts VX to the left by 1.[3] */
-static void opcode08_handler(cpu_t* p_cpu)
-{
-    uint8_t x = *p_cpu->pc & 0x0F;
-    uint8_t y = (*(p_cpu->pc + 1) >> 4) & 0x0F;
-    uint8_t op = *(p_cpu->pc + 1) & 0x0F;
+static void opcode08_handler(cpu_t* p_cpu) {
+    uint8_t x = decode_X(p_cpu);
+    uint8_t y = decode_Y(p_cpu);
+    uint8_t n = decode_N(p_cpu);
     
-    switch(op)
+    switch(n)
     {
         case (uint8_t) 0x00:
-			DEBUG_PRINT("%04x:%02x%02x V%x=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+			PRINT_INSTR("Vx=Vy");
+
             p_cpu->reg_v[x] = p_cpu->reg_v[y];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x01:
-			DEBUG_PRINT("%04x:%02x%02x V%x|=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+			PRINT_INSTR("Vx|=Vy");
+			
             p_cpu->reg_v[x] |= p_cpu->reg_v[y];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x02:
-			DEBUG_PRINT("%04x:%02x%02x V%x&=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+			PRINT_INSTR("Vx&=Vy");
+			
             p_cpu->reg_v[x] &= p_cpu->reg_v[y];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x03:
-			DEBUG_PRINT("%04x:%02x%02x V%x^=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+			PRINT_INSTR("Vx^=Vy");
+			
             p_cpu->reg_v[x] ^= p_cpu->reg_v[y];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x04:
-			DEBUG_PRINT("%04x:%02x%02x V%x+=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
-            {
-                uint16_t res = (uint16_t) p_cpu->reg_v[x] + (uint16_t) p_cpu->reg_v[y];
-                if(res & 0xFF00)
-                    p_cpu->reg_v[15] = 1;
-                else
-                    p_cpu->reg_v[15] = 0; 
-                p_cpu->reg_v[x] += p_cpu->reg_v[y];
+			{
+				PRINT_INSTR("Vx+=Vy");
+				
+				uint16_t sum = p_cpu->reg_v[x] + p_cpu->reg_v[y];
+				if(sum & (uint16_t) 0xFF00) {
+					p_cpu->reg_v[0xF] = 1;
+				} else {
+					p_cpu->reg_v[0xF] = 0;
+				}
+				
+				p_cpu->reg_v[x] = (uint8_t) sum;
                 p_cpu->pc += 2;
             }
             break;
         case (uint8_t) 0x05:
-			DEBUG_PRINT("%04x:%02x%02x V%x-=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
-            {
-                if(p_cpu->reg_v[y] > p_cpu->reg_v[x])
+			{
+				PRINT_INSTR("Vx-=Vy");
+				
+				if(p_cpu->reg_v[y] > p_cpu->reg_v[x]) {
                     p_cpu->reg_v[15] = 0;
-                else
+                } else {
                     p_cpu->reg_v[15] = 1;
-                p_cpu->reg_v[x] -= p_cpu->reg_v[y];
+				}
+				
+				p_cpu->reg_v[x] -= p_cpu->reg_v[y];
                 p_cpu->pc += 2;
-            }
+			}
             break;
         case (uint8_t) 0x06:
-			DEBUG_PRINT("%04x:%02x%02x V%x>>=1\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
-            p_cpu->reg_v[15] = p_cpu->reg_v[x] & (uint8_t) 0x01;
+			PRINT_INSTR("Vx>>=1");
+        
+            p_cpu->reg_v[0xF] = p_cpu->reg_v[x] & (uint8_t) 0x01;
             p_cpu->reg_v[x] >>= 1;
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x07:
-			DEBUG_PRINT("%04x:%02x%02x V%x=V%x-V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y, x);
             {
-                if(p_cpu->reg_v[x] > p_cpu->reg_v[y])
+				PRINT_INSTR("Vx=Vy-Vx");
+			
+                if(p_cpu->reg_v[x] > p_cpu->reg_v[y]) {
                     p_cpu->reg_v[15] = 0;
-                else
+                } else {
                     p_cpu->reg_v[15] = 1;
+				}
+				
                 p_cpu->reg_v[x] = p_cpu->reg_v[y] - p_cpu->reg_v[x];
                 p_cpu->pc += 2;
             }
+            break;
         case (uint8_t) 0x0E:
-			DEBUG_PRINT("%04x:%02x%02x V%x<<=1\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
-            p_cpu->reg_v[15] = (p_cpu->reg_v[x] >> 7) & (uint8_t) 0x01;
+			PRINT_INSTR("Vx<<=1");
+        
+            p_cpu->reg_v[0xF] = (p_cpu->reg_v[x] >> 7) & (uint8_t) 0x01;
             p_cpu->reg_v[x] <<= 1;
             p_cpu->pc += 2;
             break;
@@ -383,119 +480,123 @@ static void opcode08_handler(cpu_t* p_cpu)
 }
 
 /* 9XY0	Cond	if(Vx==Vy)	Skips the next instruction if VX doesn't equal VY. (Usually the next instruction is a jump to skip a code block) */
-static void opcode09_handler(cpu_t* p_cpu)
-{
-    uint8_t x = *p_cpu->pc & 0x0F;
-    uint8_t y = (*(p_cpu->pc + 1) >> 4) & 0x0F;
-
-	DEBUG_PRINT("%04x:%02x%02x if(V%x==V%y)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y);
+static void opcode09_handler(cpu_t* p_cpu) {
+	PRINT_INSTR("if(Vx==Vy)");
+	
+	uint8_t x = decode_X(p_cpu);
+    uint8_t y = decode_Y(p_cpu);
 	
     /* If VX != VY, skip next instruction. */
-    if(p_cpu->reg_v[y] != p_cpu->reg_v[x])
-        p_cpu->pc += 2;
-    p_cpu->pc += 2;
+    if(p_cpu->reg_v[x] != p_cpu->reg_v[y]) {
+		p_cpu->pc += 4;
+	} else {
+		p_cpu->pc += 2;
+	}
 }
 
-/* ANNN	MEM	I = NNN	Sets I to the address NNN. */
-static void opcode10_handler(cpu_t* p_cpu)
-{
-    uint16_t addr = (((uint16_t) *p_cpu->pc) << 8);
-    addr |= (uint16_t) *(p_cpu->pc + 1);
-    addr &= (uint16_t) 0x0FFF;
-    
-	DEBUG_PRINT("%04x:%02x%02x I = %03x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), addr);
+/* ANNN	MEM	I=NNN	Sets I to the address NNN. */
+static void opcode10_handler(cpu_t* p_cpu) {
+	PRINT_INSTR("I=NNN");
 	
-    p_cpu->i = p_cpu->memory + addr;
+	uint16_t nnn = decode_NNN(p_cpu);
+	
+    p_cpu->i = mem_address(p_cpu, nnn);
     p_cpu->pc += 2;
 }
 
 /* BNNN	Flow	PC=V0+NNN	Jumps to the address NNN plus V0. */
-static void opcode11_handler(cpu_t* p_cpu)
-{
-    uint16_t addr = (((uint16_t) *p_cpu->pc) << 8);
-    addr |= (uint16_t) *(p_cpu->pc + 1);
-    addr &= (uint16_t) 0x0FFF;
+static void opcode11_handler(cpu_t* p_cpu) {
+	PRINT_INSTR("PC=V0+NNN");
 
-	DEBUG_PRINT("%04x:%02x%02x PC=V0+%03x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), addr);
-	
-    p_cpu->pc = p_cpu->memory + p_cpu->reg_v[0] + addr;
+	uint8_t v0 = p_cpu->reg_v[0];
+	uint16_t nnn = decode_NNN(p_cpu);
+
+    p_cpu->pc = mem_address(p_cpu, v0 + nnn);
 }
 
 /* CXNN	Rand	Vx=rand()&NN	Sets VX to the result of a bitwise and operation on a random number (Typically: 0 to 255) and NN. */
-static void opcode12_handler(cpu_t* p_cpu)
-{
-    uint8_t x = *p_cpu->pc & 0x0F;
-    uint8_t value = *(p_cpu->pc + 1);
-    
-	DEBUG_PRINT("%04x:%02x%02x V%x=rand()&%02x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, value);
+static void opcode12_handler(cpu_t* p_cpu) {
+	PRINT_INSTR("Vx=rand()&NN");
 	
-    p_cpu->reg_v[x] = ((uint8_t) (rand() % 256)) & value;
-
+	uint8_t x = decode_X(p_cpu);
+	uint8_t nn = decode_NN(p_cpu);
+	
+    p_cpu->reg_v[x] = ((uint8_t) (rand() % 256)) & nn;
     p_cpu->pc += 2;
 }
 
 /* DXYN	Disp	draw(Vx,Vy,N)	Draws a sprite at coordinate (VX, VY) that has a width of 8 pixels and a height of N pixels. 
     Each row of 8 pixels is read as bit-coded starting from memory location I; I value doesn’t change after the execution of this instruction. 
     As described above, VF is set to 1 if any screen pixels are flipped from set to unset when the sprite is drawn, and to 0 if that doesn’t happen. */
-static void opcode13_handler(cpu_t* p_cpu)
-{
-    uint8_t x = *p_cpu->pc & 0x0F;
-    uint8_t y = (*(p_cpu->pc + 1) >> 4) & 0x0F;
-    uint8_t n = *(p_cpu->pc + 1) & 0x0F;
-    
-	DEBUG_PRINT("%04x:%02x%02x DRAW V%x, V%x, %d\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x, y, n);
+static void opcode13_handler(cpu_t* p_cpu) {
+	PRINT_INSTR("draw(Vx,Vy,N)");
+
+    uint8_t x = decode_X(p_cpu);
+    uint8_t y = decode_Y(p_cpu);
+    uint8_t n = decode_N(p_cpu);
 	    
-    p_cpu->reg_v[15] = 0;
+    p_cpu->reg_v[0xF] = 0;
 
     int line, column;
-    for(line = 0; line < (int) n; line ++)
-    {
-        uint8_t pixel = *(p_cpu->i + line);
+    for(line = 0; line < (int) n; line ++) {
+		
+        uint8_t sprite = *(p_cpu->i + line);
         
-        for(column = 0; column < 8; column ++)
-        {
-            if(pixel & (0x80 >> column))
-            {
-				uint8_t X = (p_cpu->reg_v[x] + column) % 64;
-				uint8_t Y = (p_cpu->reg_v[y] + line) % 32;
+        for(column = 0; column < 8; column ++) {
+			
+			uint8_t X = (p_cpu->reg_v[x] + column) % GRAPHICS_COLS;
+			uint8_t Y = (p_cpu->reg_v[y] + line) % GRAPHICS_ROWS;
 				
-				if(p_cpu->graphics[X/8 + (Y*8)] & (0x80 >> (X%8)))
-					p_cpu->reg_v[15] = 1;
-				p_cpu->graphics[X/8 + (Y*8)] ^= (0x80 >> (X%8));
-            }
+			uint8_t* pixel_screen = p_cpu->graphics + X + (Y * GRAPHICS_COLS);
+			
+			uint8_t sprite_bit = sprite >> (7 - column);
+			sprite_bit &= (uint8_t) 0x01;
+			
+            if(sprite_bit && *pixel_screen) {
+				p_cpu->reg_v[0xF] = 1;
+			}
+			
+			*pixel_screen = *pixel_screen ^ sprite_bit;            
         }
     }
     
     p_cpu->draw_flag = 1;
-    
     p_cpu->pc += 2;
 }
 
 /*
 EX9E	KeyOp	if(key()==Vx)	Skips the next instruction if the key stored in VX is pressed. (Usually the next instruction is a jump to skip a code block)
 EXA1	KeyOp	if(key()!=Vx)	Skips the next instruction if the key stored in VX isn't pressed. (Usually the next instruction is a jump to skip a code block)*/
-static void opcode14_handler(cpu_t* p_cpu)
-{
-    uint8_t x = *p_cpu->pc & 0x0F;
-    
-    (void) x;
-    
-    switch(*(p_cpu->pc + 1))
-    {
+static void opcode14_handler(cpu_t* p_cpu) {
+	uint8_t x = decode_X(p_cpu);
+	uint8_t nn = decode_NN(p_cpu);
+	
+    switch(nn) {
         case (uint8_t) 0x9E:
-			DEBUG_PRINT("%04x:%02x%02x if(key()==V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
-			if(p_cpu->keys[p_cpu->reg_v[x]]) {
-				p_cpu->pc += 2;
+			{
+				PRINT_INSTR("if(key()==Vx)");
+				
+				uint8_t key = p_cpu->reg_v[x];
+				
+				if((key < KEY_COUNT) && (p_cpu->keys[key])) {
+					p_cpu->pc += 4;
+				} else {
+					p_cpu->pc += 2;
+				}
 			}
-			p_cpu->pc += 2;
 			break;
-        
         case (uint8_t) 0xA1:
-			DEBUG_PRINT("%04x:%02x%02x if(key()!=V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
-			if(!p_cpu->keys[p_cpu->reg_v[x]]) {
-				p_cpu->pc += 2;
+			{
+				PRINT_INSTR("if(key()!=Vx)");
+				
+				uint8_t key = p_cpu->reg_v[x];
+				
+				if((key < KEY_COUNT) && (!p_cpu->keys[key])) {
+					p_cpu->pc += 4;
+				} else {
+					p_cpu->pc += 2;
+				}
 			}
-			p_cpu->pc += 2;
 			break;
         default:
         unhandled_opcode_handler(p_cpu);
@@ -522,19 +623,19 @@ Stores the binary-coded decimal representation of VX, with the most significant 
 FX55	MEM	reg_dump(Vx,&I)	Stores V0 to VX (including VX) in memory starting at address I. The offset from I is increased by 1 for each value written, but I itself is left unmodified.
 FX65	MEM	reg_load(Vx,&I)	Fills V0 to VX (including VX) with values from memory starting at address I. The offset from I is increased by 1 for each value written, but I itself is left unmodified.
 */
-static void opcode15_handler(cpu_t* p_cpu)
-{
-    uint8_t x = *p_cpu->pc & 0x0F;
-    
-    switch(*(p_cpu->pc + 1))
-    {
+static void opcode15_handler(cpu_t* p_cpu) {
+	uint8_t x = decode_X(p_cpu);
+	
+    switch(decode_NN(p_cpu)) {
         case (uint8_t) 0x07:
-			DEBUG_PRINT("%04x:%02x%02x V%x = get_delay()\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			PRINT_INSTR("Vx=get_delay()");
+        
             p_cpu->reg_v[x] = p_cpu->timer_delay;
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x0A:
-			DEBUG_PRINT("%04x:%02x%02x V%x = get_key()\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			PRINT_INSTR("Vx=get_key()");
+			
 			p_cpu->halted_flag = 1;
 			for(uint8_t i=0; i<16; i++)
 			{
@@ -548,39 +649,51 @@ static void opcode15_handler(cpu_t* p_cpu)
 			}
             break;
         case (uint8_t) 0x15:
-			DEBUG_PRINT("%04x:%02x%02x delay_timer(V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			PRINT_INSTR("delay_timer(Vx)");
+
             p_cpu->timer_delay = p_cpu->reg_v[x];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x18:
-			DEBUG_PRINT("%04x:%02x%02x sound_timer(V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			PRINT_INSTR("sound_timer(Vx)");
+
             p_cpu->timer_sound = p_cpu->reg_v[x];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x1E:
-			DEBUG_PRINT("%04x:%02x%02x I+=V%x\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			PRINT_INSTR("I+=Vx");
+
             p_cpu->i += p_cpu->reg_v[x];
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x29:
-			DEBUG_PRINT("%04x:%02x%02x I=sprite_addr[V%x]\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
-			p_cpu->i = p_cpu->font + (p_cpu->reg_v[x] * 5);
+			PRINT_INSTR("I=sprite_addr[Vx]");
+
+			p_cpu->i = p_cpu->font + (p_cpu->reg_v[x] * FONT_CHAR_SIZE);
             p_cpu->pc += 2;
 			break;
         case (uint8_t) 0x33:
-			DEBUG_PRINT("%04x:%02x%02x BCD(V%x)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
-			*p_cpu->i = p_cpu->reg_v[x] / 100;
-			*(p_cpu->i + 1) = (p_cpu->reg_v[x] / 10) % 10;
-			*(p_cpu->i + 2) = p_cpu->reg_v[x] % 10;
-            p_cpu->pc += 2;
+			{
+				PRINT_INSTR("BCD(Vx)");
+				
+				uint8_t vx = p_cpu->reg_v[x];
+				
+				*(p_cpu->i + 2) = vx % 10; vx /= 10;
+				*(p_cpu->i + 1) = vx % 10; vx /= 10;
+				*(p_cpu->i + 0) = vx % 10;
+				
+				p_cpu->pc += 2;
+			}
 			break;
         case (uint8_t) 0x55:
-			DEBUG_PRINT("%04x:%02x%02x reg_dump(V%x,&I)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			PRINT_INSTR("reg_dump(Vx,&I)");
+
             (void) memcpy(p_cpu->i, p_cpu->reg_v, (x + 1) * sizeof(uint8_t));
             p_cpu->pc += 2;
             break;
         case (uint8_t) 0x65:
-			DEBUG_PRINT("%04x:%02x%02x reg_load(V%x,&I)\n", p_cpu->pc - p_cpu->memory, *(p_cpu->pc), *(p_cpu->pc + 1), x);
+			PRINT_INSTR("reg_load(Vx,&I)");
+
             (void) memcpy(p_cpu->reg_v, p_cpu->i, (x + 1) * sizeof(uint8_t));
             p_cpu->pc += 2;
             break;

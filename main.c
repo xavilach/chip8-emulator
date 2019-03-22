@@ -16,7 +16,6 @@ typedef struct shared_data_s {
 
 typedef struct rom_s {
 	uint8_t* data;
-	uint16_t address;
 	size_t size;
 } rom_t;
 
@@ -64,9 +63,7 @@ static int load_rom(rom_t* p_rom, char* path) {
 	}
 	
 	(void) fread(p_rom->data, p_rom->size, 1, file);
-	
-	p_rom->address = 0x200;
-	
+		
 	fclose(file);
 	
 	return 0;
@@ -136,7 +133,7 @@ void* thread_graphics(void* arg) {
 			{
 				for(int column=0; column<64; column++)
 				{
-					if(graphics[column/8 + (line * 8)] & (0x80 >> column % 8))
+					if(graphics[column + (line * 64)])
 					{
 						SDL_Rect rect = {column * 10, line * 10, 10, 10};
 						SDL_RenderFillRect(renderer, &rect); 
@@ -197,7 +194,7 @@ int main(int argc, char* argv[]) {
 
 	if (p_cpu) {
 		
-		cpu_load(p_cpu, rom.data, rom.size, rom.address);
+		cpu_load(p_cpu, rom.data, rom.size);
 		
 		shared_data_t shared_data;
 		shared_data.p_cpu = p_cpu;
