@@ -10,7 +10,7 @@ typedef struct cpu_s cpu_t;
 /* Public function declarations */
 
 cpu_t* cpu_allocate(void);
-void cpu_load(cpu_t* p_cpu, uint8_t* program, uint16_t size, uint16_t start);
+void cpu_load(cpu_t* p_cpu, uint8_t* program, uint16_t size);
 
 void cpu_run(cpu_t* p_cpu);
 void cpu_tick(cpu_t* p_cpu);
