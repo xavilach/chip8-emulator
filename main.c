@@ -1,5 +1,4 @@
 #include "cpu.h"
-
 #include "log.h"
 
 #include "SDL2/SDL.h"
@@ -7,6 +6,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <pthread.h>
+
+/* Defines */
+
+/* Typedefs */
 
 typedef struct shared_data_s {
 	cpu_t* p_cpu;
@@ -19,7 +22,13 @@ typedef struct rom_s {
 	size_t size;
 } rom_t;
 
-const uint8_t mapped_keys[16] = {
+/* Private variables */
+
+static const float draw_frequency = 60.0; /* Hz */
+static const float cpu_frequency = 600.0; /* Hz */
+static const float timer_frequency = 60.0; /* Hz */
+
+static const uint8_t mapped_keys[16] = {
 	SDL_SCANCODE_X, // 0
 	SDL_SCANCODE_1, // 1
 	SDL_SCANCODE_2, // 2
@@ -37,6 +46,64 @@ const uint8_t mapped_keys[16] = {
 	SDL_SCANCODE_F, // 14
 	SDL_SCANCODE_V, // 15
 };
+
+/* Private function declarations */
+
+static int load_rom(rom_t* p_rom, char* path);
+static void* thread_cpu(void* arg);
+static void* thread_timers(void* arg);
+static void* thread_graphics(void* arg);
+
+/* Public function definitions */
+
+int main(int argc, char* argv[]) {
+	if (argc < 2) {
+		ERROR_PRINT("Missing argument.\n");
+		return -1;
+	}
+
+	rom_t rom;
+	if(load_rom(&rom, argv[1]) != 0) {
+		ERROR_PRINT("load_rom failed.\n");
+		return -1;
+	}
+
+	if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+		ERROR_PRINT("SDL_Init failed.\n");
+		return -1;
+	}
+	
+	cpu_t* p_cpu = cpu_allocate();
+
+	if (p_cpu) {
+		cpu_load(p_cpu, rom.data, rom.size);
+		
+		shared_data_t shared_data;
+		shared_data.p_cpu = p_cpu;
+		pthread_mutex_init(&(shared_data.mutex), NULL);
+		pthread_cond_init(&(shared_data.key_pressed), NULL);
+		
+		pthread_t pth_cpu, pth_graphics, pth_timers;
+		
+		(void) pthread_create(&pth_cpu, NULL, thread_cpu, &shared_data);
+		(void) pthread_create(&pth_timers, NULL, thread_timers, &shared_data);
+		(void) pthread_create(&pth_graphics, NULL, thread_graphics, &shared_data);
+
+		(void) pthread_join(pth_graphics, NULL);
+		
+		(void) pthread_cancel(pth_cpu);
+		(void) pthread_cancel(pth_timers);
+		
+	} else {
+		ERROR_PRINT("cpu_allocate failed.\n");
+	}
+	
+	SDL_Quit();
+
+	return 0;
+}
+
+/* Private function definitions */
 
 static int load_rom(rom_t* p_rom, char* path) {
 	if(!p_rom || !path) return -1;
@@ -69,7 +136,7 @@ static int load_rom(rom_t* p_rom, char* path) {
 	return 0;
 }
 
-void* thread_cpu(void* arg) {
+static void* thread_cpu(void* arg) {
 	shared_data_t* data = (shared_data_t*) arg;
 
 	while(1) {
@@ -78,16 +145,17 @@ void* thread_cpu(void* arg) {
 		cpu_run(data->p_cpu);
 		
 		if(cpu_halted(data->p_cpu)) {
+			/* If CPU is halted, wait for a key pressed. */
 			pthread_cond_wait(&(data->key_pressed), &(data->mutex));
 		}
 		
 		(void) pthread_mutex_unlock(&(data->mutex));
 		
-		SDL_Delay((int)(1000.0/600.0));
+		SDL_Delay((int)(1000.0/cpu_frequency));
 	}
 }
 
-void* thread_timers(void* arg) {
+static void* thread_timers(void* arg) {
 	shared_data_t* data = (shared_data_t*) arg;
 
 	while(1) {
@@ -95,11 +163,11 @@ void* thread_timers(void* arg) {
 		cpu_tick(data->p_cpu);
 		(void) pthread_mutex_unlock(&(data->mutex));
 		
-		SDL_Delay((int)(1000.0/60.0));
+		SDL_Delay((int)(1000.0/timer_frequency));
 	}
 }
 
-void* thread_graphics(void* arg) {
+static void* thread_graphics(void* arg) {
 	shared_data_t* data = (shared_data_t*) arg;
 
 	SDL_Window *window = SDL_CreateWindow("CHIP8-EMULATOR",
@@ -115,6 +183,11 @@ void* thread_graphics(void* arg) {
 		ERROR_PRINT("SDL_CreateRenderer failed.\n");
 		pthread_exit(NULL);
 	}
+	
+	/* Clear screen. */
+	SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+	SDL_RenderClear(renderer);
+	SDL_RenderPresent(renderer);
 
 	int quit = 0;
 	while(!quit) {	
@@ -166,7 +239,7 @@ void* thread_graphics(void* arg) {
 		
 		(void) pthread_mutex_unlock(&(data->mutex));
 		
-		SDL_Delay((int)(1000.0/60.0));
+		SDL_Delay((int)(1000.0/draw_frequency));
 	}
 	
 	SDL_DestroyRenderer(renderer);
@@ -175,49 +248,3 @@ void* thread_graphics(void* arg) {
 	pthread_exit(NULL);
 }
 
-int main(int argc, char* argv[]) {
-	if (argc < 1)
-		return -1;
-
-	rom_t rom;
-	if(load_rom(&rom, argv[1]) != 0) {
-		ERROR_PRINT("load_rom failed.\n");
-		return -1;
-	}
-
-	if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-		ERROR_PRINT("SDL_Init failed.\n");
-		return -1;
-	}
-	
-	cpu_t* p_cpu = cpu_allocate();
-
-	if (p_cpu) {
-		
-		cpu_load(p_cpu, rom.data, rom.size);
-		
-		shared_data_t shared_data;
-		shared_data.p_cpu = p_cpu;
-		pthread_mutex_init(&(shared_data.mutex), NULL);
-		pthread_cond_init(&(shared_data.key_pressed), NULL);
-		
-		pthread_t pth_cpu, pth_graphics, pth_timers;
-		
-		(void) pthread_create(&pth_cpu, NULL, thread_cpu, &shared_data);
-		(void) pthread_create(&pth_timers, NULL, thread_timers, &shared_data);
-		(void) pthread_create(&pth_graphics, NULL, thread_graphics, &shared_data);
-
-		(void) pthread_join(pth_graphics, NULL);
-		
-		(void) pthread_cancel(pth_cpu);
-		(void) pthread_cancel(pth_timers);
-	}
-	else
-	{
-		ERROR_PRINT("cpu_allocate failed.\n");
-	}
-	
-	SDL_Quit();
-
-	return 0;
-}
