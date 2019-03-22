@@ -3,7 +3,6 @@
 #include "log.h"
 
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -193,13 +192,14 @@ cpu_t* cpu_allocate(void) {
 		p_cpu->sp = mem_address(p_cpu, STACK_ADDRESS);
 		p_cpu->pc = mem_address(p_cpu, ROM_ADDRESS);
 		p_cpu->font = mem_address(p_cpu, FONT_ADDRESS);
+		p_cpu->i = mem_address(p_cpu, 0);
     }
     
     return p_cpu;
 }
 
 void cpu_load(cpu_t* p_cpu, uint8_t* program, uint16_t size) {
-	if (p_cpu && program) {	
+	if (p_cpu && program) {
 		p_cpu->pc = mem_address(p_cpu, ROM_ADDRESS);
 		
 		(void) memset(p_cpu->memory, 0, MEM_SIZE);
@@ -265,7 +265,7 @@ void cpu_release_key(cpu_t* p_cpu, uint8_t key) {
 /* Private function definitions */
 
 static void unhandled_opcode_handler(cpu_t* p_cpu) {
-	PRINT_INSTR("ERROR");
+	PRINT_INSTR("UNHANDLED OPCODE");
     exit(-1);
 }
 
@@ -637,7 +637,7 @@ static void opcode15_handler(cpu_t* p_cpu) {
 			PRINT_INSTR("Vx=get_key()");
 			
 			p_cpu->halted_flag = 1;
-			for(uint8_t i=0; i<16; i++)
+			for(uint8_t i=0; i<KEY_COUNT; i++)
 			{
 				if(p_cpu->keys[i])
 				{
